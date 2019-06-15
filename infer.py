@@ -15,7 +15,7 @@ import argparse
 from datetime import datetime as timer
 from keras import backend as K
 
-from model import fcn8s
+from model import fcn8s_resnet
 from config import cfg
 from vis import make_palette, color_seg, vis_seg
 
@@ -38,7 +38,7 @@ def parse_args():
 def pred(model, img_path):
     input_images = [] # Store resized versions of the images here.
     orig_image = cv2.imread(img_path)
-    img = cv2.resize(orig_image, (cfg.height, cfg.width)).astype('float32')
+    img = cv2.resize(orig_image, (cfg.width, cfg.height)).astype('float32')
     img -= cfg.mean
     input_images.append(img)
     input_images = np.array(input_images)   
@@ -54,7 +54,7 @@ if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
 
     K.clear_session() # Clear previous models from memory.
-    model = fcn8s(height=cfg.height, width=cfg.width)
+    model = fcn8s_resnet(height=cfg.height, width=cfg.width)
     weights_path = os.path.abspath(args.weights)
     model.load_weights(weights_path, by_name=True)
     
@@ -69,14 +69,20 @@ if __name__ == '__main__':
     delta = timer.now() - t
     print(len(ims), 'images cost: ', delta)
     print('average cost: ', delta/len(ims))
-    
+    with open('segs.pkl', 'wb') as f:
+        pickle.dump(segs, f)
+        
     # visualize segmentation in PASCAL VOC colors
     voc_palette = make_palette(21)
     for i in range(len(ims)):
+        img_path = '../data/VOC2007/JPEGImages/'+ims[i]
+        im = Image.open(img_path)
+        im = np.array(im, np.uint8)
+        im = cv2.resize(im, (cfg.width, cfg.height))
         out_im = Image.fromarray(color_seg(segs[i], voc_palette))
         out_im.save('results/{}_output.png'.format(ims[i][:-4]))
-#        masked_im = Image.fromarray(vis_seg(im, out, voc_palette))
-#        masked_im.save('demo/visualization.jpg')
+        masked_im = Image.fromarray(vis_seg(im, segs[i], voc_palette))
+        masked_im.save('results/'+ims[i])
     
     
 

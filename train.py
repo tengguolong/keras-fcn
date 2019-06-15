@@ -6,15 +6,16 @@ Created on Fri Jun 14 13:25:28 2019
 """
 
 from __future__ import print_function
-from keras.optimizers import Adam
+from keras.optimizers import Adam, SGD
 from keras.callbacks import ModelCheckpoint, LearningRateScheduler, TerminateOnNaN, CSVLogger
+from keras.models import load_model
 import tensorflow as tf
 from keras import backend as K
 import os
 import argparse
 
 from config import cfg
-from model import fcn8s
+from model import fcn8s_resnet
 from data_generator import DataGenerator
 
 
@@ -37,6 +38,8 @@ def parse_args():
                         default='vgg16', type=str)
     parser.add_argument('--no_weights', action='store_true',
                         default=False, dest='no_weights')
+    parser.add_argument('--load_model', action='store_true',
+                        default=False, dest='load_model')
     parser.add_argument('--weights', dest='weights',
                         help='initialize with pretrained model weights',
                         default='snapshot/vgg16_weights_notop.h5', type=str)
@@ -62,12 +65,14 @@ def fcnLoss(y_true, y_pred):
 
 # Define a learning rate schedule.
 def lr_schedule(epoch):
-    if epoch < 10:
-        return 5e-4
-    elif epoch < 20:
+    if epoch < 5:
+        return 1e-3
+    elif epoch < 10:
         return 1e-4
+    elif epoch < 30:
+        return 1e-5
     else:
-        return 1e-4
+        return 2e-6
 
 
 if __name__ == '__main__':
@@ -83,25 +88,30 @@ if __name__ == '__main__':
     
     # Build model
     K.clear_session()
-    model = fcn8s(height=cfg.height, width=cfg.width)
-    print(model.summary())
-    adam = Adam(lr=1e-4, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-    model.compile(optimizer=adam,
-                  loss=fcnLoss)
-    
-    # Load weights
-    if not args.no_weights:
-        model.load_weights(args.weights, by_name=True)
+    if args.load_model:
+        print('Loading model from ', os.path.abspath(args.weights))
+        model = load_model(args.weights, custom_objects={'fcnLoss': fcnLoss})
+        print(model.summary())
+    else:
+        model = fcn8s_resnet(height=cfg.height, width=cfg.width)
+        print(model.summary())
+        adam = Adam(lr=1e-4, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
+        sgd = SGD(lr=1e-4, momentum=0.9, decay=0.0, nesterov=False)
+        model.compile(optimizer=sgd, loss=fcnLoss)    
+        # Load weights
+        if not args.no_weights:
+            print('Loading weights from ', os.path.abspath(args.weights))
+            model.load_weights(args.weights, by_name=True)
         
     # Define model callbacks.
-    model_checkpoint = ModelCheckpoint(filepath='snapshot/fcn8s_epoch-{epoch:02d}_loss-{loss:.3f}_val_loss-{val_loss:.3f}.h5',
+    model_checkpoint = ModelCheckpoint(filepath='snapshot/fcn8s_resnet_epoch-{epoch:02d}_loss-{loss:.3f}_val_loss-{val_loss:.3f}.h5',
                                        monitor='loss',
                                        verbose=1,
                                        save_best_only=False,
                                        save_weights_only=False,
                                        mode='auto',
                                        period=10) 
-    csv_logger = CSVLogger(filename='log/fcn8s_training_log.csv',
+    csv_logger = CSVLogger(filename='log/fcn8s_resnet_training_log.csv',
                            separator=',',
                            append=True)
     learning_rate_scheduler = LearningRateScheduler(schedule=lr_schedule, verbose=1)
@@ -111,7 +121,7 @@ if __name__ == '__main__':
                  learning_rate_scheduler,
                  terminate_on_nan]
     
-    train_generator = DataGenerator(split='minival', batch_size=args.batch_size)
+    train_generator = DataGenerator(split='train', batch_size=args.batch_size)
     val_generator = DataGenerator(split='minival', batch_size=1, shuffle=False)
     history = model.fit_generator(generator=train_generator,
                                   epochs=args.epochs,

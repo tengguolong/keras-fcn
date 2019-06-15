@@ -6,44 +6,12 @@ Created on Thu Jun 13 19:19:04 2019
 """
 
 from __future__ import print_function
-from keras.layers import Input, Conv2D, MaxPooling2D, ZeroPadding2D, Add, Reshape
-from keras.layers import Activation, Dropout, Conv2DTranspose, Cropping2D
+from keras.layers import Input, Conv2D, Add
+from keras.layers import Dropout, Conv2DTranspose, Cropping2D
 from keras.models import Model
 import keras.backend as K
 
-def vgg16(img_input):
-    # Block 1
-    x = Conv2D(64, (3, 3), activation='relu', padding='same', name='block1_conv1')(img_input)
-    x = Conv2D(64, (3, 3), activation='relu', padding='same', name='block1_conv2')(x)
-    x = MaxPooling2D((2, 2), strides=(2, 2), padding='same', name='block1_pool')(x)
-    
-    # Block 2
-    x = Conv2D(128, (3, 3), activation='relu', padding='same', name='block2_conv1')(x)
-    x = Conv2D(128, (3, 3), activation='relu', padding='same', name='block2_conv2')(x)
-    x = MaxPooling2D((2, 2), strides=(2, 2), padding='same', name='block2_pool')(x)
-
-    # Block 3
-    x = Conv2D(256, (3, 3), activation='relu', padding='same', name='block3_conv1')(x)
-    x = Conv2D(256, (3, 3), activation='relu', padding='same', name='block3_conv2')(x)
-    x = Conv2D(256, (3, 3), activation='relu', padding='same', name='block3_conv3')(x)
-    x = MaxPooling2D((2, 2), strides=(2, 2), padding='same', name='block3_pool')(x)
-    f3 = x
-
-    # Block 4
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv1')(x)
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv2')(x)
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv3')(x)
-    x = MaxPooling2D((2, 2), strides=(2, 2), padding='same', name='block4_pool')(x)
-    f4 = x
-
-    # Block 5
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv1')(x)
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv2')(x)
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv3')(x)
-    x = MaxPooling2D((2, 2), strides=(2, 2), name='block5_pool')(x)
-    f5 = x
-    
-    return [f3, f4, f5]
+from encoder import resnet50_encoder, vgg16_encoder
 
 
 def crop(x, y):
@@ -65,15 +33,15 @@ def crop(x, y):
     return [x, y]            
 
 
-def fcn8s_head(features, n_classes):
+def fcn8s_head_original(features, n_classes):
     assert len(features) == 3, 'FCN-8 requires 3 feature maps'
     [f3, f4, f5] = features
     
     x = f5
     x = Conv2D(4096, (7, 7), activation='relu' , padding='same', name='f5_conv1')(x)
-    x = Dropout(0.25)(x)
+    x = Dropout(0.5)(x)
     x = Conv2D(4096, (1, 1), activation='relu' , padding='same', name='f5_conv2')(x)
-    x = Dropout(0.25)(x)
+    x = Dropout(0.5)(x)
     x = Conv2D(n_classes, (1, 1), kernel_initializer='he_normal', name='f5_conv3')(x)
     
     # f5与f4相加
@@ -92,37 +60,67 @@ def fcn8s_head(features, n_classes):
     return x
 
 
+def fcn8s_head_light(features, n_classes):
+    assert len(features) == 3, 'FCN-8 requires 3 feature maps'
+    [f3, f4, f5] = features
+    
+    x = f5
+    x = Conv2D(n_classes, (1, 1), kernel_initializer='he_normal', name='f5_conv3')(x)    
+    # f5与f4相加
+    x = Conv2DTranspose(n_classes, kernel_size=(4,4), strides=(2,2), use_bias=False, name='deconv1')(x)    
+    f4 = Conv2D(n_classes, (1, 1), kernel_initializer='he_normal', name='f4_conv')(f4)
+    x, f4 = crop(x, f4)
+    x = Add()([x, f4])
+    # 再与f3相加
+    x = Conv2DTranspose(n_classes, kernel_size=(4,4), strides=(2,2), use_bias=False, name='deconv2')(x)
+    f3 = Conv2D(n_classes, (1, 1), kernel_initializer='he_normal', name='f3_conv')(f3)
+    x, f3 = crop(x, f3)
+    x = Add()([x, f3])
+    # 最后反卷积至输入图像尺寸
+    x = Conv2DTranspose(n_classes, kernel_size=(16,16), strides=(8,8), use_bias=False, name='deconv3')(x)
+    return x
+
+
 def fcn32s_head(features, n_classes):
     [f3, f4, f5] = features
     
     x = f5
     x = Conv2D(4096, (7, 7), activation='relu' , padding='same', name='f5_conv1')(x)
-#    x = Dropout(0.5)(x)
+    x = Dropout(0.5)(x)
     x = Conv2D(4096, (1, 1), activation='relu' , padding='same', name='f5_conv2')(x)
-#    x = Dropout(0.5)(x)
+    x = Dropout(0.5)(x)
     x = Conv2D(n_classes, (1, 1), kernel_initializer='he_normal', name='f5_conv3')(x)
     x = Conv2DTranspose(n_classes, kernel_size=(64, 64), strides=(32, 32), use_bias=False, name='deconv')(x)
     return x
 
 
-def fcn8s(height, width, n_classes=21, mode='train'):
+def fcn8s_vgg(height, width, n_classes=21, mode='train'):
     img_input = Input(shape=(height, width, 3))
-    output = vgg16(img_input)
-    output = fcn8s_head(output, n_classes)
+    output = vgg16_encoder(img_input)
+    output = fcn8s_head_original(output, n_classes)
     img_input, output = crop(img_input, output)
     model = Model(img_input, output)
-    model.name = 'FCN-8s'
+    model.name = 'FCN-8s-VGG16'
     return model
 
-def fcn32s(height, width, n_classes=21, mode='train'):
+def fcn8s_resnet(height, width, n_classes=21, mode='train'):
     img_input = Input(shape=(height, width, 3))
-    output = vgg16(img_input)
+    output = resnet50_encoder(img_input)
+    output = fcn8s_head_light(output, n_classes)
+    img_input, output = crop(img_input, output)
+    model = Model(img_input, output)
+    model.name = 'FCN-8s-ResNet50'
+    return model
+
+def fcn32s_vgg(height, width, n_classes=21, mode='train'):
+    img_input = Input(shape=(height, width, 3))
+    output = vgg16_encoder(img_input)
     output = fcn32s_head(output, n_classes)
     img_input, output = crop(img_input, output)
     model = Model(img_input, output)
-    model.name = 'FCN-32s'
+    model.name = 'FCN-32s-VGG16'
     return model     
 
 if __name__ == '__main__':
-    model = fcn8s(512, 512)
+    model = fcn8s_resnet(512, 512)
     print(model.summary())
